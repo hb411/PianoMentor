@@ -29,6 +29,7 @@ workflows:
                   INFOPLIST_KEY_UILaunchScreen_Generation: YES
                   INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
                   CODE_SIGNING_ALLOWED: NO
+                  GENERATE_INFOPLIST_FILE: YES
           YAML
 
           cat > PianoMentor/PianoMentorApp.swift <<'SWIFT'
