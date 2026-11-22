@@ -1,4 +1,4 @@
-workflows:
+fworkflows:
   pianomentor-hardware-test:
     name: PianoMentor V1 Hardware Test
     instance_type: mac_mini_m2
@@ -226,6 +226,6 @@ workflows:
       - name: Build simulator app
         script: |
           set -e
-          xcodebuild -project PianoMentor.xcodeproj -scheme PianoMentor -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -project PianoMentor.xcodeproj -scheme PianoMentor -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO GENERATE_INFOPLIST_FILE=YES build
     artifacts:
       - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/PianoMentor.app
