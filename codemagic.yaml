@@ -1,0 +1,230 @@
+workflows:
+  pianomentor-hardware-test:
+    name: PianoMentor V1 Hardware Test
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+    scripts:
+      - name: Create PianoMentor source
+        script: |
+          set -e
+          mkdir -p PianoMentor
+          cat > project.yml <<'YAML'
+          name: PianoMentor
+          options:
+            bundleIdPrefix: com.hb411
+            deploymentTarget:
+              iOS: "17.0"
+          targets:
+            PianoMentor:
+              type: application
+              platform: iOS
+              sources: [PianoMentor]
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.hb411.PianoMentor
+                  TARGETED_DEVICE_FAMILY: "2"
+                  INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
+                  INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+                  CODE_SIGNING_ALLOWED: NO
+          YAML
+
+          cat > PianoMentor/PianoMentorApp.swift <<'SWIFT'
+          import SwiftUI
+
+          @main
+          struct PianoMentorApp: App {
+              @StateObject private var midi = MIDIManager()
+              var body: some Scene {
+                  WindowGroup { ContentView().environmentObject(midi) }
+              }
+          }
+          SWIFT
+
+          cat > PianoMentor/MIDIManager.swift <<'SWIFT'
+          import Foundation
+          import CoreMIDI
+
+          final class MIDIManager: ObservableObject {
+              @Published var lastNote: Int? = nil
+              @Published var lastVelocity: Int = 0
+              @Published var sources: [String] = []
+              @Published var destinations: [String] = []
+              @Published var status = "Looking for MIDI…"
+
+              private var client = MIDIClientRef()
+              private var inputPort = MIDIPortRef()
+              private var outputPort = MIDIPortRef()
+
+              init() { setup() }
+
+              func refresh() { scanAndConnect() }
+
+              private func setup() {
+                  MIDIClientCreateWithBlock("PianoMentor" as CFString, &client) { [weak self] _ in
+                      DispatchQueue.main.async { self?.scanAndConnect() }
+                  }
+                  MIDIInputPortCreateWithProtocol(client, "PianoMentor Input" as CFString, ._1_0, &inputPort) { [weak self] eventList, _ in
+                      self?.handle(eventList.pointee)
+                  }
+                  MIDIOutputPortCreate(client, "PianoMentor Output" as CFString, &outputPort)
+                  scanAndConnect()
+              }
+
+              private func scanAndConnect() {
+                  for i in 0..<MIDIGetNumberOfSources() {
+                      let endpoint = MIDIGetSource(i)
+                      MIDIPortDisconnectSource(inputPort, endpoint)
+                      MIDIPortConnectSource(inputPort, endpoint, nil)
+                  }
+                  var s: [String] = []
+                  for i in 0..<MIDIGetNumberOfSources() {
+                      let endpoint = MIDIGetSource(i)
+                      s.append(name(endpoint))
+                      MIDIPortConnectSource(inputPort, endpoint, nil)
+                  }
+                  var d: [String] = []
+                  for i in 0..<MIDIGetNumberOfDestinations() { d.append(name(MIDIGetDestination(i))) }
+                  DispatchQueue.main.async {
+                      self.sources = s; self.destinations = d
+                      self.status = (s.isEmpty && d.isEmpty) ? "No MIDI device detected" : "MIDI connected"
+                  }
+              }
+
+              private func name(_ object: MIDIObjectRef) -> String {
+                  var value: Unmanaged<CFString>?
+                  MIDIObjectGetStringProperty(object, kMIDIPropertyDisplayName, &value)
+                  return value?.takeRetainedValue() as String? ?? "MIDI Device"
+              }
+
+              private func handle(_ list: MIDIEventList) {
+                  var packet = list.packet
+                  for _ in 0..<list.numPackets {
+                      let words = Mirror(reflecting: packet.words).children.compactMap { $0.value as? UInt32 }
+                      for word in words where word != 0 {
+                          let status = UInt8((word >> 16) & 0xFF)
+                          let note = UInt8((word >> 8) & 0xFF)
+                          let velocity = UInt8(word & 0xFF)
+                          if status & 0xF0 == 0x90 && velocity > 0 {
+                              DispatchQueue.main.async { self.lastNote = Int(note); self.lastVelocity = Int(velocity) }
+                          } else if status & 0xF0 == 0x80 || (status & 0xF0 == 0x90 && velocity == 0) {
+                              DispatchQueue.main.async { if self.lastNote == Int(note) { self.lastNote = nil } }
+                          }
+                      }
+                      packet = MIDIEventPacketNext(&packet).pointee
+                  }
+              }
+
+              func playC4() {
+                  guard MIDIGetNumberOfDestinations() > 0 else { status = "No MIDI destination"; return }
+                  let dest = MIDIGetDestination(0)
+                  send(status: 0x90, note: 60, velocity: 90, to: dest)
+                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.send(status: 0x80, note: 60, velocity: 0, to: dest) }
+              }
+
+              private func send(status: UInt8, note: UInt8, velocity: UInt8, to dest: MIDIEndpointRef) {
+                  var list = MIDIEventList()
+                  let packet = MIDIEventListInit(&list, ._1_0)
+                  var words = [UInt32(status) << 16 | UInt32(note) << 8 | UInt32(velocity)]
+                  words.withUnsafeBufferPointer { ptr in
+                      _ = MIDIEventListAdd(&list, MemoryLayout<MIDIEventList>.size, packet, 0, 1, ptr.baseAddress!)
+                  }
+                  MIDISendEventList(outputPort, dest, &list)
+              }
+          }
+          SWIFT
+
+          cat > PianoMentor/ContentView.swift <<'SWIFT'
+          import SwiftUI
+
+          struct ContentView: View {
+              @EnvironmentObject var midi: MIDIManager
+              var body: some View {
+                  VStack(spacing: 22) {
+                      HStack {
+                          VStack(alignment: .leading) {
+                              Text("PianoMentor").font(.largeTitle.bold())
+                              Text("Disklavier ENSPIRE · Hardware Test").foregroundStyle(.secondary)
+                          }
+                          Spacer()
+                          Text(midi.status).padding(.horizontal, 14).padding(.vertical, 8).background(.thinMaterial).clipShape(Capsule())
+                      }
+                      .padding(.horizontal)
+
+                      Spacer()
+                      Text(noteName(midi.lastNote)).font(.system(size: 70, weight: .bold, design: .rounded))
+                      Text(midi.lastNote == nil ? "Play a key on the Yamaha" : "MIDI note \(midi.lastNote!) · velocity \(midi.lastVelocity)")
+                          .font(.title3).foregroundStyle(.secondary)
+
+                      KeyboardView(activeNote: midi.lastNote)
+                          .frame(height: 190).padding(.horizontal)
+
+                      Button { midi.playC4() } label: {
+                          Label("Play C4 on Yamaha", systemImage: "pianokeys")
+                              .font(.title2.bold()).frame(maxWidth: 420).padding()
+                      }.buttonStyle(.borderedProminent)
+
+                      HStack(spacing: 28) {
+                          VStack(alignment: .leading) {
+                              Text("INPUT").font(.caption.bold()).foregroundStyle(.secondary)
+                              Text(midi.sources.isEmpty ? "None" : midi.sources.joined(separator: ", "))
+                          }
+                          VStack(alignment: .leading) {
+                              Text("OUTPUT").font(.caption.bold()).foregroundStyle(.secondary)
+                              Text(midi.destinations.isEmpty ? "None" : midi.destinations.joined(separator: ", "))
+                          }
+                          Button("Refresh MIDI") { midi.refresh() }
+                      }.font(.footnote).padding(.bottom)
+                  }
+                  .padding().preferredColorScheme(.light)
+              }
+
+              private func noteName(_ n: Int?) -> String {
+                  guard let n else { return "—" }
+                  let names = ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"]
+                  return "\(names[n % 12])\(n / 12 - 1)"
+              }
+          }
+
+          struct KeyboardView: View {
+              let activeNote: Int?
+              private let start = 48, end = 72
+              private let black = Set([1,3,6,8,10])
+              var body: some View {
+                  GeometryReader { geo in
+                      let whites = (start...end).filter { !black.contains($0 % 12) }
+                      let w = geo.size.width / CGFloat(whites.count)
+                      ZStack(alignment: .topLeading) {
+                          HStack(spacing: 0) {
+                              ForEach(whites, id: \.self) { n in
+                                  Rectangle().fill(activeNote == n ? Color.accentColor.opacity(0.55) : Color.white)
+                                      .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
+                              }
+                          }
+                          ForEach(start...end, id: \.self) { n in
+                              if black.contains(n % 12), let wi = whiteIndex(before: n, whites: whites) {
+                                  Rectangle().fill(activeNote == n ? Color.accentColor : Color.black)
+                                      .frame(width: w * 0.62, height: geo.size.height * 0.62)
+                                      .offset(x: CGFloat(wi + 1) * w - w * 0.31)
+                              }
+                          }
+                      }.clipShape(RoundedRectangle(cornerRadius: 8))
+                  }
+              }
+              private func whiteIndex(before n: Int, whites: [Int]) -> Int? { whites.lastIndex(where: { $0 < n }) }
+          }
+          SWIFT
+
+      - name: Generate Xcode project
+        script: |
+          set -e
+          brew install xcodegen || true
+          xcodegen generate
+      - name: Build simulator app
+        script: |
+          set -e
+          xcodebuild -project PianoMentor.xcodeproj -scheme PianoMentor -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+    artifacts:
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/PianoMentor.app
