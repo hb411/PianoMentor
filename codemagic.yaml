@@ -1,4 +1,4 @@
-fworkflows:
+workflows:
   pianomentor-hardware-test:
     name: PianoMentor V1 Hardware Test
     instance_type: mac_mini_m2
