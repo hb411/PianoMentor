@@ -4,6 +4,9 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.hb411.PianoMentor
       xcode: latest
     scripts:
       - name: Create PianoMentor source
@@ -28,7 +31,7 @@ workflows:
                   INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
                   INFOPLIST_KEY_UILaunchScreen_Generation: YES
                   INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-                  CODE_SIGNING_ALLOWED: NO
+        
                   GENERATE_INFOPLIST_FILE: YES
           YAML
 
@@ -223,9 +226,9 @@ workflows:
           set -e
           brew install xcodegen || true
           xcodegen generate
-      - name: Build simulator app
+      - name: Set up code signing
         script: |
-          set -e
-          xcodebuild -project PianoMentor.xcodeproj -scheme PianoMentor -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO GENERATE_INFOPLIST_FILE=YES build
-    artifacts:
-      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/Products/Debug-iphonesimulator/PianoMentor.app
+          xcode-project use-profiles
+      - name: Build signed IPA
+        script: |
+          xcode-project build-ipa --project PianoMentor.xcodeproj --scheme PianoMentor
