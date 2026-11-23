@@ -236,6 +236,6 @@ workflows:
           xcode-project build-ipa --project PianoMentor.xcodeproj --scheme PianoMentor
     artifacts:
       - build/ios/ipa/*.ipa
-        publishing:
-          app_store_connect:
-            auth: integration
+    publishing:
+      app_store_connect:
+        auth: integration
