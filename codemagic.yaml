@@ -232,5 +232,5 @@ workflows:
       - name: Build signed IPA
         script: |
           xcode-project build-ipa --project PianoMentor.xcodeproj --scheme PianoMentor
-artifacts:
-- build/ios/ipa/*.ipa
+        artifacts:
+          - build/ios/ipa/*.ipa
