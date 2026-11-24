@@ -11,7 +11,7 @@ workflows:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.hb411.PianoMentor
-      xcode: '27.2'
+      xcode: '27.0'
     scripts:
       - name: Verify Xcode and iOS SDK
         script: |
