@@ -205,12 +205,13 @@ workflows:
 
               private func handle(_ packetList: UnsafePointer<MIDIPacketList>) {
                   var events: [(UInt32, Int, Int, Bool)] = []
-                  var packet = packetList.pointee.packet
+                  guard let packetOffset = MemoryLayout<MIDIPacketList>.offset(of: \.packet),
+                        let dataOffset = MemoryLayout<MIDIPacket>.offset(of: \.data) else { return }
+                  var packet = UnsafeRawPointer(packetList).advanced(by: packetOffset).assumingMemoryBound(to: MIDIPacket.self)
 
                   for _ in 0..<packetList.pointee.numPackets {
-                      let bytes = withUnsafeBytes(of: packet.data) { raw -> [UInt8] in
-                          Array(raw.prefix(Int(packet.length)))
-                      }
+                      let data = UnsafeRawPointer(packet).advanced(by: dataOffset).assumingMemoryBound(to: UInt8.self)
+                      let bytes = Array(UnsafeBufferPointer(start: data, count: Int(packet.pointee.length)))
                       var i = 0
                       var runningStatus: UInt8 = 0
 
@@ -243,7 +244,7 @@ workflows:
                               i += 2
                           }
                       }
-                      packet = MIDIPacketNext(&packet).pointee
+                      packet = UnsafePointer(MIDIPacketNext(UnsafeMutablePointer(mutating: packet)))
                   }
 
                   guard !events.isEmpty else { return }
