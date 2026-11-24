@@ -137,8 +137,11 @@ workflows:
           cat > PianoMentor/MIDIManager.swift <<'SWIFT'
           import Foundation
           import CoreMIDI
+          import Combine
 
           final class MIDIManager: ObservableObject {
+              @Published var activeNotes: Set<Int> = []
+              private var held: [UInt32: Int] = [:]
               @Published var lastNote: Int? = nil
               @Published var lastVelocity: Int = 0
               @Published var sources: [String] = []
@@ -158,7 +161,7 @@ workflows:
                       DispatchQueue.main.async { self?.scanAndConnect() }
                   }
                   MIDIInputPortCreateWithProtocol(client, "PianoMentor Input" as CFString, ._1_0, &inputPort) { [weak self] eventList, _ in
-                      self?.handle(eventList.pointee)
+                      self?.handle(eventList)
                   }
                   MIDIOutputPortCreate(client, "PianoMentor Output" as CFString, &outputPort)
                   scanAndConnect()
@@ -190,21 +193,41 @@ workflows:
                   return value?.takeRetainedValue() as String? ?? "MIDI Device"
               }
 
-              private func handle(_ list: MIDIEventList) {
-                  var packet = list.packet
-                  for _ in 0..<list.numPackets {
-                      let words = Mirror(reflecting: packet.words).children.compactMap { $0.value as? UInt32 }
-                      for word in words where word != 0 {
-                          let status = UInt8((word >> 16) & 0xFF)
-                          let note = UInt8((word >> 8) & 0xFF)
-                          let velocity = UInt8(word & 0xFF)
-                          if status & 0xF0 == 0x90 && velocity > 0 {
-                              DispatchQueue.main.async { self.lastNote = Int(note); self.lastVelocity = Int(velocity) }
-                          } else if status & 0xF0 == 0x80 || (status & 0xF0 == 0x90 && velocity == 0) {
-                              DispatchQueue.main.async { if self.lastNote == Int(note) { self.lastNote = nil } }
+              private func handle(_ list: UnsafePointer<MIDIEventList>) {
+                  var events: [(UInt32, Int, Int, Bool)] = []
+                  guard list.pointee.numPackets > 0 else { return }
+                  guard let offset = MemoryLayout<MIDIEventList>.offset(of: \.packet) else { return }
+                  do {
+                      var packet = UnsafeRawPointer(list).advanced(by: offset).assumingMemoryBound(to: MIDIEventPacket.self)
+                      for _ in 0..<list.pointee.numPackets {
+                          let words = Mirror(reflecting: packet.pointee.words).children.compactMap { $0.value as? UInt32 }
+                          for word in words.prefix(Int(packet.pointee.wordCount)) {
+                              guard word >> 28 == 2 else { continue }
+                              let status = (word >> 16) & 0xFF
+                              let note = Int((word >> 8) & 0x7F)
+                              let velocity = Int(word & 0x7F)
+                              let kind = status & 0xF0
+                              guard kind == 0x90 || kind == 0x80 else { continue }
+                              let key = (word & 0x0F000000) | ((status & 0x0F) << 8) | UInt32(note)
+                              events.append((key, note, velocity, kind == 0x90 && velocity > 0))
+                          }
+                          packet = UnsafePointer(MIDIEventPacketNext(UnsafeMutablePointer(mutating: packet)))
+                      }
+                  }
+                  DispatchQueue.main.async {
+                      for (key, note, velocity, on) in events {
+                          if on {
+                              self.held[key] = note
+                              self.lastNote = note
+                              self.lastVelocity = velocity
+                          } else {
+                              self.held.removeValue(forKey: key)
                           }
                       }
-                      packet = MIDIEventPacketNext(&packet).pointee
+                      self.activeNotes = Set(self.held.values)
+                      if let last = self.lastNote, !self.activeNotes.contains(last) {
+                          self.lastNote = self.activeNotes.max()
+                      }
                   }
               }
 
@@ -248,11 +271,11 @@ workflows:
                       .padding(.horizontal)
 
                       Spacer()
-                      Text(noteName(midi.lastNote)).font(.system(size: 70, weight: .bold, design: .rounded))
+                      Text(midi.activeNotes.isEmpty ? "—" : midi.activeNotes.sorted().map { noteName($0) }.joined(separator: " – ")).font(.system(size: 42, weight: .bold, design: .rounded))
                       Text(midi.lastNote == nil ? "Play a key on the Yamaha" : "MIDI note \(midi.lastNote!) · velocity \(midi.lastVelocity)")
                           .font(.title3).foregroundStyle(.secondary)
 
-                      KeyboardView(activeNote: midi.lastNote)
+                      KeyboardView(activeNotes: midi.activeNotes)
                           .frame(height: 190).padding(.horizontal)
 
                       Button { midi.playC4() } label: {
@@ -283,7 +306,7 @@ workflows:
           }
 
           struct KeyboardView: View {
-              let activeNote: Int?
+              let activeNotes: Set<Int>
               private let start = 48, end = 72
               private let black = Set([1,3,6,8,10])
               var body: some View {
@@ -293,13 +316,13 @@ workflows:
                       ZStack(alignment: .topLeading) {
                           HStack(spacing: 0) {
                               ForEach(whites, id: \.self) { n in
-                                  Rectangle().fill(activeNote == n ? Color.accentColor.opacity(0.55) : Color.white)
+                                  Rectangle().fill(activeNotes.contains(n) ? Color.accentColor.opacity(0.55) : Color.white)
                                       .overlay(Rectangle().stroke(Color.black, lineWidth: 1))
                               }
                           }
                           ForEach(start...end, id: \.self) { n in
                               if black.contains(n % 12), let wi = whiteIndex(before: n, whites: whites) {
-                                  Rectangle().fill(activeNote == n ? Color.accentColor : Color.black)
+                                  Rectangle().fill(activeNotes.contains(n) ? Color.accentColor : Color.black)
                                       .frame(width: w * 0.62, height: geo.size.height * 0.62)
                                       .offset(x: CGFloat(wi + 1) * w - w * 0.31)
                               }
