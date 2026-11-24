@@ -11,8 +11,15 @@ workflows:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.hb411.PianoMentor
-      xcode: latest
+      xcode: '27.2'
     scripts:
+      - name: Verify Xcode and iOS SDK
+        script: |
+          set -e
+          xcodebuild -version
+          SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK: $SDK_VERSION"
+          test "${SDK_VERSION%%.*}" -ge 27
       - name: Create PianoMentor source
         script: |
           set -e
