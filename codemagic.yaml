@@ -44,6 +44,7 @@ workflows:
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                 
                   GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
                   MARKETING_VERSION: "1.0"
                   CURRENT_PROJECT_VERSION: "1"
           YAML
@@ -312,6 +313,19 @@ workflows:
       - name: Build signed IPA
         script: |
           xcode-project build-ipa --project PianoMentor.xcodeproj --scheme PianoMentor
+      - name: Verify packaged launch screen
+        script: |
+          set -e
+          python3 - <<'PY'
+          import glob, zipfile, plistlib
+          ipa = glob.glob('build/ios/ipa/*.ipa')[0]
+          with zipfile.ZipFile(ipa) as z:
+              p = next(n for n in z.namelist() if n.startswith('Payload/') and n.endswith('.app/Info.plist') and n.count('/') == 2)
+              info = plistlib.loads(z.read(p))
+              keys = ['UILaunchScreen', 'UILaunchScreens', 'UILaunchStoryboardName', 'UILaunchStoryboards']
+              assert any(k in info for k in keys), 'Missing launch screen in packaged Info.plist'
+              print('Launch screen verified:', [k for k in keys if k in info])
+          PY
     artifacts:
       - build/ios/ipa/*.ipa
     publishing:
