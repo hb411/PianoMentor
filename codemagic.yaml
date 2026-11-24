@@ -33,14 +33,81 @@ workflows:
                   PRODUCT_BUNDLE_IDENTIFIER: com.hb411.PianoMentor
                   TARGETED_DEVICE_FAMILY: "2"
                   INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
-                  INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-        
+                  INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+                
                   GENERATE_INFOPLIST_FILE: YES
                   MARKETING_VERSION: "1.0"
                   CURRENT_PROJECT_VERSION: "1"
           YAML
+          mkdir -p PianoMentor/Assets.xcassets/AppIcon.appiconset
 
+          python3 - <<'PY'
+
+          import json, struct, zlib
+
+          from pathlib import Path
+
+          root = Path("PianoMentor/Assets.xcassets")
+
+          folder = root / "AppIcon.appiconset"
+
+          def chunk(tag, data):
+
+              return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
+
+          def icon(n):
+
+              rows = []
+
+              for y in range(n):
+
+                  row = bytearray([0])
+
+                  for x in range(n):
+
+                      u, v = x / n, y / n
+
+                      color = (25, 35, 55)
+
+                      if 0.15 < u < 0.85 and 0.25 < v < 0.75:
+
+                          k = (u - 0.15) / 0.1
+
+                          color = (245, 245, 245)
+
+                          if k % 1 < 0.045:
+
+                              color = (25, 35, 55)
+
+                          if v < 0.55 and any(abs(k-i) < 0.28 for i in [1,2,4,5,6]):
+
+                              color = (15, 15, 20)
+
+                      row.extend(color)
+
+                  rows.append(bytes(row))
+
+              return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", n,n,8,2,0,0,0)) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
+
+          images = []
+
+          for size, scale, pixels in [("20x20","1x",20),("20x20","2x",40),("29x29","1x",29),("29x29","2x",58),("40x40","1x",40),("40x40","2x",80),("76x76","1x",76),("76x76","2x",152),("83.5x83.5","2x",167)]:
+
+              name = f"icon-{pixels}.png"
+
+              (folder / name).write_bytes(icon(pixels))
+
+              images.append(dict(idiom="ipad",size=size,scale=scale,filename=name))
+
+          (folder / "icon-1024.png").write_bytes(icon(1024))
+
+          images.append(dict(idiom="ios-marketing",size="1024x1024",scale="1x",filename="icon-1024.png"))
+
+          (folder / "Contents.json").write_text(json.dumps(dict(images=images,info=dict(author="xcode",version=1))))
+
+          (root / "Contents.json").write_text(json.dumps(dict(info=dict(author="xcode",version=1))))
+          PY
           cat > PianoMentor/PianoMentorApp.swift <<'SWIFT'
           import SwiftUI
 
