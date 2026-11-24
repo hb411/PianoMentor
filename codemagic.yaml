@@ -231,11 +231,45 @@ workflows:
                   }
               }
 
-              func playC4() {
+              private var playbackGeneration = 0
+              private var sounding: Set<UInt8> = []
+              private var playbackDestination: MIDIEndpointRef?
+              @Published var isPlaying = false
+
+              func stopPlayback() {
+                  playbackGeneration += 1
+                  if let dest = playbackDestination {
+                      for note in sounding { send(status: 0x80, note: note, velocity: 0, to: dest) }
+                  }
+                  sounding.removeAll()
+                  playbackDestination = nil
+                  isPlaying = false
+              }
+
+              func playC4() { playSequence([[60]]) }
+              func playChord() { playSequence([[60, 64, 67]]) }
+              func playPassage() { playSequence([[60], [64], [67], [72], [67], [64], [60]], duration: 0.35) }
+
+              private func playSequence(_ steps: [[UInt8]], duration: Double = 0.7) {
+                  stopPlayback()
                   guard MIDIGetNumberOfDestinations() > 0 else { status = "No MIDI destination"; return }
                   let dest = MIDIGetDestination(0)
-                  send(status: 0x90, note: 60, velocity: 90, to: dest)
-                  DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.send(status: 0x80, note: 60, velocity: 0, to: dest) }
+                  playbackDestination = dest
+                  isPlaying = true
+                  let generation = playbackGeneration
+                  func advance(_ index: Int) {
+                      guard generation == self.playbackGeneration else { return }
+                      guard index < steps.count else { self.stopPlayback(); return }
+                      self.sounding = Set(steps[index])
+                      for note in self.sounding { self.send(status: 0x90, note: note, velocity: 75, to: dest) }
+                      DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                          guard let self, generation == self.playbackGeneration else { return }
+                          for note in self.sounding { self.send(status: 0x80, note: note, velocity: 0, to: dest) }
+                          self.sounding.removeAll()
+                          advance(index + 1)
+                      }
+                  }
+                  advance(0)
               }
 
               private func send(status: UInt8, note: UInt8, velocity: UInt8, to dest: MIDIEndpointRef) {
@@ -283,6 +317,12 @@ workflows:
                               .font(.title2.bold()).frame(maxWidth: 420).padding()
                       }.buttonStyle(.borderedProminent)
 
+                      HStack {
+                          Button("Play C major chord") { midi.playChord() }
+                          Button("Play short passage") { midi.playPassage() }
+                          Button("Stop", role: .destructive) { midi.stopPlayback() }
+                      }.buttonStyle(.bordered)
+
                       HStack(spacing: 28) {
                           VStack(alignment: .leading) {
                               Text("INPUT").font(.caption.bold()).foregroundStyle(.secondary)
@@ -296,6 +336,7 @@ workflows:
                       }.font(.footnote).padding(.bottom)
                   }
                   .padding().preferredColorScheme(.light)
+                  .onDisappear { midi.stopPlayback() }
               }
 
               private func noteName(_ n: Int?) -> String {
