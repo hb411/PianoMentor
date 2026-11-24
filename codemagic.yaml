@@ -218,11 +218,14 @@ workflows:
               private func send(status: UInt8, note: UInt8, velocity: UInt8, to dest: MIDIEndpointRef) {
                   var list = MIDIEventList()
                   let packet = MIDIEventListInit(&list, ._1_0)
-                  var words = [UInt32(status) << 16 | UInt32(note) << 8 | UInt32(velocity)]
+                  var words = [0x20000000 | UInt32(status) << 16 | UInt32(note) << 8 | UInt32(velocity)]
                   words.withUnsafeBufferPointer { ptr in
                       _ = MIDIEventListAdd(&list, MemoryLayout<MIDIEventList>.size, packet, 0, 1, ptr.baseAddress!)
                   }
-                  MIDISendEventList(outputPort, dest, &list)
+                  let result = MIDISendEventList(outputPort, dest, &list)
+                  if status & 0xF0 == 0x90 {
+                      self.status = "MIDI send: \(result) · \(self.name(dest))"
+                  }
               }
           }
           SWIFT
