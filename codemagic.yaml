@@ -168,9 +168,11 @@ workflows:
                   MIDIClientCreateWithBlock("PianoMentor" as CFString, &client) { [weak self] _ in
                       DispatchQueue.main.async { self?.scanAndConnect() }
                   }
-                  MIDIInputPortCreateWithProtocol(client, "PianoMentor Input" as CFString, ._1_0, &inputPort) { [weak self] eventList, _ in
-                      self?.handle(eventList)
-                  }
+                  MIDIInputPortCreate(client, "PianoMentor Input" as CFString, { packetList, readProcRefCon, _ in
+                      guard let readProcRefCon else { return }
+                      let manager = Unmanaged<MIDIManager>.fromOpaque(readProcRefCon).takeUnretainedValue()
+                      manager.handle(packetList)
+                  }, Unmanaged.passUnretained(self).toOpaque(), &inputPort)
                   MIDIOutputPortCreate(client, "PianoMentor Output" as CFString, &outputPort)
                   scanAndConnect()
               }
@@ -201,27 +203,50 @@ workflows:
                   return value?.takeRetainedValue() as String? ?? "MIDI Device"
               }
 
-              private func handle(_ list: UnsafePointer<MIDIEventList>) {
+              private func handle(_ packetList: UnsafePointer<MIDIPacketList>) {
                   var events: [(UInt32, Int, Int, Bool)] = []
-                  guard list.pointee.numPackets > 0 else { return }
-                  guard let offset = MemoryLayout<MIDIEventList>.offset(of: \.packet) else { return }
-                  do {
-                      var packet = UnsafeRawPointer(list).advanced(by: offset).assumingMemoryBound(to: MIDIEventPacket.self)
-                      for _ in 0..<list.pointee.numPackets {
-                          let words = Mirror(reflecting: packet.pointee.words).children.compactMap { $0.value as? UInt32 }
-                          for word in words.prefix(Int(packet.pointee.wordCount)) {
-                              guard word >> 28 == 2 else { continue }
-                              let status = (word >> 16) & 0xFF
-                              let note = Int((word >> 8) & 0x7F)
-                              let velocity = Int(word & 0x7F)
-                              let kind = status & 0xF0
-                              guard kind == 0x90 || kind == 0x80 else { continue }
-                              let key = (word & 0x0F000000) | ((status & 0x0F) << 8) | UInt32(note)
-                              events.append((key, note, velocity, kind == 0x90 && velocity > 0))
-                          }
-                          packet = UnsafePointer(MIDIEventPacketNext(UnsafeMutablePointer(mutating: packet)))
+                  var packet = packetList.pointee.packet
+
+                  for _ in 0..<packetList.pointee.numPackets {
+                      let bytes = withUnsafeBytes(of: packet.data) { raw -> [UInt8] in
+                          Array(raw.prefix(Int(packet.length)))
                       }
+                      var i = 0
+                      var runningStatus: UInt8 = 0
+
+                      while i < bytes.count {
+                          var status = bytes[i]
+                          if status & 0x80 != 0 {
+                              runningStatus = status
+                              i += 1
+                          } else {
+                              guard runningStatus != 0 else { i += 1; continue }
+                              status = runningStatus
+                          }
+
+                          let kind = status & 0xF0
+                          if kind == 0x90 || kind == 0x80 {
+                              guard i + 1 < bytes.count else { break }
+                              let note = Int(bytes[i])
+                              let velocity = Int(bytes[i + 1])
+                              let channel = UInt32(status & 0x0F)
+                              let key = (channel << 8) | UInt32(note)
+                              events.append((key, note, velocity, kind == 0x90 && velocity > 0))
+                              i += 2
+                          } else if kind == 0xC0 || kind == 0xD0 {
+                              i += 1
+                          } else if status >= 0xF0 {
+                              // System messages are irrelevant to keyboard note tracking.
+                              // Stop parsing this packet rather than risk treating payload bytes as notes.
+                              break
+                          } else {
+                              i += 2
+                          }
+                      }
+                      packet = MIDIPacketNext(&packet).pointee
                   }
+
+                  guard !events.isEmpty else { return }
                   DispatchQueue.main.async {
                       for (key, note, velocity, on) in events {
                           if on {
@@ -236,6 +261,7 @@ workflows:
                       if let last = self.lastNote, !self.activeNotes.contains(last) {
                           self.lastNote = self.activeNotes.max()
                       }
+                      self.status = "MIDI input · \(self.activeNotes.count) held"
                   }
               }
 
