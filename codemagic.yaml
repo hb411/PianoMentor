@@ -355,6 +355,69 @@ workflows:
 
           struct ContentView: View {
               @EnvironmentObject var midi: MIDIManager
+              @State private var root = 0
+              @State private var quality = 0
+              @State private var inversion = 0
+              @State private var voicing = 0
+              @State private var arpeggio = false
+              @State private var bpm = 90.0
+              @State private var library = false
+              private let roots = ["C","C♯","D","E♭","E","F","F♯","G","A♭","A","B♭","B"]
+              private let shapes: [(String, [Int])] = [
+                  ("Major",[0,4,7]), ("Minor",[0,3,7]), ("7",[0,4,7,10]),
+                  ("maj7",[0,4,7,11]), ("m7",[0,3,7,10]), ("dim",[0,3,6]),
+                  ("dim7",[0,3,6,9]), ("aug",[0,4,8]), ("sus2",[0,2,7]),
+                  ("sus4",[0,5,7]), ("add9",[0,4,7,14]), ("6",[0,4,7,9]),
+                  ("m7♭5",[0,3,6,10]), ("9",[0,4,7,10,14]), ("maj9",[0,4,7,11,14]),
+                  ("m9",[0,3,7,10,14]), ("11",[0,4,7,10,14,17]),
+                  ("maj11",[0,4,7,11,14,17]), ("m11",[0,3,7,10,14,17]),
+                  ("13",[0,4,7,10,14,17,21]), ("maj13",[0,4,7,11,14,17,21]),
+                  ("m13",[0,3,7,10,14,17,21]), ("7♭9",[0,4,7,10,13]),
+                  ("7♯9",[0,4,7,10,15]), ("7♯11",[0,4,7,10,18])
+              ]
+              private var chordNotes: [UInt8] {
+                  var notes = shapes[quality].1.map { 48 + root + $0 }
+                  if voicing == 2 && notes.count >= 4 { notes.removeFirst() }
+                  for _ in 0..<min(inversion, notes.count - 1) {
+                      var n = notes.removeFirst()
+                      while n <= (notes.last ?? n) { n += 12 }
+                      notes.append(n)
+                  }
+                  if voicing == 1 && notes.count > 2 { notes[1] += 12 }
+                  return notes.sorted().map { UInt8($0) }
+              }
+              private var chordLibrary: some View {
+                  NavigationStack {
+                      Form {
+                          Picker("Root", selection: $root) {
+                              ForEach(roots.indices, id: \.self) { Text(roots[$0]).tag($0) }
+                          }
+                          Picker("Quality", selection: $quality) {
+                              ForEach(shapes.indices, id: \.self) { Text(shapes[$0].0).tag($0) }
+                          }
+                          Picker("Inversion", selection: $inversion) {
+                              ForEach(0..<shapes[quality].1.count, id: \.self) { Text($0 == 0 ? "Root position" : "Rotation \($0)").tag($0) }
+                          }
+                          Picker("Voicing", selection: $voicing) {
+                              Text("Standard").tag(0)
+                              Text("Open").tag(1)
+                              Text("Omit root (7th and extended)").tag(2)
+                          }
+                          Toggle("Arpeggiate", isOn: $arpeggio)
+                          Text("Tempo: \(Int(bpm)) BPM")
+                          Slider(value: $bpm, in: 40...180, step: 1)
+                          Text(chordNotes.map { noteName(Int($0)) }.joined(separator: " – "))
+                          KeyboardView(activeNotes: Set(chordNotes.map(Int.init))).frame(height: 120)
+                          Button("Play selected chord") {
+                              midi.playSequence(arpeggio ? chordNotes.map { [$0] } : [chordNotes], duration: 60 / bpm)
+                          }
+                          Button("Stop", role: .destructive) { midi.stopPlayback() }
+                      }
+                      .navigationTitle("Chord Library")
+                      .toolbar { Button("Done") { midi.stopPlayback(); library = false } }
+                      .onChange(of: quality) { _, _ in inversion = 0 }
+                  }
+              }
               var body: some View {
                   VStack(spacing: 22) {
                       HStack {
@@ -385,6 +448,7 @@ workflows:
                       }.buttonStyle(.borderedProminent)
 
                       HStack {
+                          Button("Chord Library") { library = true }
                           Button("Play C major chord") { midi.playChord() }
                           Button("Play short passage") { midi.playPassage() }
                           Button("Stop", role: .destructive) { midi.stopPlayback() }
@@ -408,6 +472,7 @@ workflows:
                       }.font(.footnote).padding(.bottom)
                   }
                   .padding().preferredColorScheme(.light)
+                  .sheet(isPresented: $library) { chordLibrary }
                   .onDisappear { midi.stopPlayback() }
               }
 
