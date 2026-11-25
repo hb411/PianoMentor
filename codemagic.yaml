@@ -271,6 +271,7 @@ workflows:
               private var playbackDestination: MIDIEndpointRef?
               @Published var isPlaying = false
               @Published var playbackNotes: Set<Int> = []
+              @Published var lastPlaybackNotes: Set<Int> = []
 
               func stopPlayback() {
                   playbackGeneration += 1
@@ -298,14 +299,24 @@ workflows:
                       guard generation == self.playbackGeneration else { return }
                       guard index < steps.count else { self.stopPlayback(); return }
                       self.sounding = Set(steps[index])
-                      self.playbackNotes = Set(steps[index].map(Int.init))
+                      let visualNotes = Set(steps[index].map(Int.init))
+                      self.playbackNotes = visualNotes
+                      self.lastPlaybackNotes = visualNotes
                       for note in self.sounding { self.send(status: 0x90, note: note, velocity: 75, to: dest) }
                       DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
                           guard let self, generation == self.playbackGeneration else { return }
                           for note in self.sounding { self.send(status: 0x80, note: note, velocity: 0, to: dest) }
                           self.sounding.removeAll()
-                          self.playbackNotes = []
-                          advance(index + 1)
+                          // Keep the just-played notes visible through the Disklavier's mechanical release.
+                          // The next step replaces them; the final step remains as a playback result until
+                          // the user plays the Yamaha or starts another playback.
+                          if index + 1 < steps.count {
+                              advance(index + 1)
+                          } else {
+                              self.playbackNotes = self.lastPlaybackNotes
+                              self.playbackDestination = nil
+                              self.isPlaying = false
+                          }
                       }
                   }
                   advance(0)
