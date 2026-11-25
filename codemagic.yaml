@@ -193,6 +193,11 @@ workflows:
                   for i in 0..<MIDIGetNumberOfDestinations() { d.append(name(MIDIGetDestination(i))) }
                   DispatchQueue.main.async {
                       self.sources = s; self.destinations = d
+                      self.destinationIDs = (0..<MIDIGetNumberOfDestinations()).map { MIDIGetDestination($0) }
+                      if let selected = self.selectedDestination, !self.destinationIDs.contains(selected) {
+                          self.stopPlayback()
+                          self.selectedDestination = nil
+                      }
                       self.status = (s.isEmpty && d.isEmpty) ? "No MIDI device detected" : "MIDI connected"
                   }
               }
@@ -266,6 +271,12 @@ workflows:
                   }
               }
 
+              @Published var selectedDestination: MIDIEndpointRef? = nil
+              @Published var destinationIDs: [MIDIEndpointRef] = []
+              func selectDestination(_ endpoint: MIDIEndpointRef?) {
+                  stopPlayback()
+                  selectedDestination = endpoint
+              }
               private var playbackGeneration = 0
               private var sounding: Set<UInt8> = []
               private var playbackDestination: MIDIEndpointRef?
@@ -288,10 +299,11 @@ workflows:
               func playChord() { playSequence([[60, 64, 67]]) }
               func playPassage() { playSequence([[60], [64], [67], [72], [67], [64], [60]], duration: 0.35) }
 
-              private func playSequence(_ steps: [[UInt8]], duration: Double = 0.7) {
+              func playSequence(_ steps: [[UInt8]], duration: Double = 0.7) {
                   stopPlayback()
                   guard MIDIGetNumberOfDestinations() > 0 else { status = "No MIDI destination"; return }
-                  let dest = MIDIGetDestination(0)
+                  let dest = selectedDestination ?? MIDIGetDestination(0)
+                  guard destinationIDs.contains(dest) else { status = "MIDI destination unavailable"; return }
                   playbackDestination = dest
                   isPlaying = true
                   let generation = playbackGeneration
@@ -339,6 +351,7 @@ workflows:
 
           cat > PianoMentor/ContentView.swift <<'SWIFT'
           import SwiftUI
+          import CoreMIDI
 
           struct ContentView: View {
               @EnvironmentObject var midi: MIDIManager
@@ -384,7 +397,12 @@ workflows:
                           }
                           VStack(alignment: .leading) {
                               Text("OUTPUT").font(.caption.bold()).foregroundStyle(.secondary)
-                              Text(midi.destinations.isEmpty ? "None" : midi.destinations.joined(separator: ", "))
+                              Picker("MIDI output", selection: Binding(get: { midi.selectedDestination }, set: { midi.selectDestination($0) })) {
+                                      Text("Automatic").tag(Optional<MIDIEndpointRef>.none)
+                                      ForEach(Array(midi.destinationIDs.enumerated()), id: \.element) { index, endpoint in
+                                          Text(index < midi.destinations.count ? midi.destinations[index] : "MIDI Device").tag(Optional(endpoint))
+                                      }
+                                  }
                           }
                           Button("Refresh MIDI") { midi.refresh() }
                       }.font(.footnote).padding(.bottom)
