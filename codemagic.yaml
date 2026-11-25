@@ -309,13 +309,14 @@ workflows:
                   playbackDestination = dest
                   isPlaying = true
                   let generation = playbackGeneration
+                  let delay = visualDelay
                   func advance(_ index: Int) {
                       guard generation == self.playbackGeneration else { return }
                       guard index < steps.count else { self.stopPlayback(); return }
                       self.sounding = Set(steps[index])
                       let visualNotes = Set(steps[index].map(Int.init))
                       for note in self.sounding { self.send(status: 0x90, note: note, velocity: 75, to: dest) }
-                      DispatchQueue.main.asyncAfter(deadline: .now() + self.visualDelay) { [weak self] in
+                      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                           guard let self, generation == self.playbackGeneration else { return }
                           self.playbackNotes = visualNotes
                           self.lastPlaybackNotes = visualNotes
@@ -331,7 +332,7 @@ workflows:
                               advance(index + 1)
                           } else {
                               self.playbackDestination = nil
-                              DispatchQueue.main.asyncAfter(deadline: .now() + self.visualDelay) { [weak self] in
+                              DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                                   guard let self, generation == self.playbackGeneration else { return }
                                   self.playbackNotes = []
                                   self.lastPlaybackNotes = []
