@@ -270,6 +270,7 @@ workflows:
               private var sounding: Set<UInt8> = []
               private var playbackDestination: MIDIEndpointRef?
               @Published var isPlaying = false
+              @Published var playbackNotes: Set<Int> = []
 
               func stopPlayback() {
                   playbackGeneration += 1
@@ -277,6 +278,7 @@ workflows:
                       for note in sounding { send(status: 0x80, note: note, velocity: 0, to: dest) }
                   }
                   sounding.removeAll()
+                  playbackNotes = []
                   playbackDestination = nil
                   isPlaying = false
               }
@@ -296,11 +298,13 @@ workflows:
                       guard generation == self.playbackGeneration else { return }
                       guard index < steps.count else { self.stopPlayback(); return }
                       self.sounding = Set(steps[index])
+                      self.playbackNotes = Set(steps[index].map(Int.init))
                       for note in self.sounding { self.send(status: 0x90, note: note, velocity: 75, to: dest) }
                       DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
                           guard let self, generation == self.playbackGeneration else { return }
                           for note in self.sounding { self.send(status: 0x80, note: note, velocity: 0, to: dest) }
                           self.sounding.removeAll()
+                          self.playbackNotes = []
                           advance(index + 1)
                       }
                   }
@@ -340,11 +344,15 @@ workflows:
                       .padding(.horizontal)
 
                       Spacer()
-                      Text(midi.activeNotes.isEmpty ? "—" : midi.activeNotes.sorted().map { noteName($0) }.joined(separator: " – ")).font(.system(size: 42, weight: .bold, design: .rounded))
+                      let shownNotes = midi.activeNotes.isEmpty ? midi.playbackNotes : midi.activeNotes
+                      if let chord = chordName(shownNotes) {
+                          Text(chord).font(.title.bold())
+                      }
+                      Text(shownNotes.isEmpty ? "—" : shownNotes.sorted().map { noteName($0) }.joined(separator: " – ")).font(.system(size: 42, weight: .bold, design: .rounded))
                       Text(midi.lastNote == nil ? "Play a key on the Yamaha" : "MIDI note \(midi.lastNote!) · velocity \(midi.lastVelocity)")
                           .font(.title3).foregroundStyle(.secondary)
 
-                      KeyboardView(activeNotes: midi.activeNotes)
+                      KeyboardView(activeNotes: midi.activeNotes.union(midi.playbackNotes))
                           .frame(height: 190).padding(.horizontal)
 
                       Button { midi.playC4() } label: {
@@ -372,6 +380,29 @@ workflows:
                   }
                   .padding().preferredColorScheme(.light)
                   .onDisappear { midi.stopPlayback() }
+              }
+
+              private func chordName(_ notes: Set<Int>) -> String? {
+                  guard notes.count >= 3 else { return nil }
+                  let pcs = Set(notes.map { $0 % 12 })
+                  let names = ["C","C♯","D","E♭","E","F","F♯","G","A♭","A","B♭","B"]
+                  let patterns: [(Set<Int>, String)] = [
+                      ([0,4,7], "major"), ([0,3,7], "minor"),
+                      ([0,3,6], "diminished"), ([0,4,8], "augmented"),
+                      ([0,5,7], "sus4"), ([0,2,7], "sus2"),
+                      ([0,4,7,10], "7"), ([0,4,7,11], "maj7"),
+                      ([0,3,7,10], "m7")
+                  ]
+                  for root in 0..<12 {
+                      let relative = Set(pcs.map { ($0 - root + 12) % 12 })
+                      for (pattern, quality) in patterns where relative == pattern {
+                          if quality == "major" { return "\(names[root]) major" }
+                          if quality == "minor" { return "\(names[root]) minor" }
+                          if quality == "m7" { return "\(names[root]) minor 7" }
+                          return "\(names[root]) \(quality)"
+                      }
+                  }
+                  return nil
               }
 
               private func noteName(_ n: Int?) -> String {
