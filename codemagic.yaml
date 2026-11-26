@@ -327,6 +327,80 @@ workflows:
                   localAudio = enabled
               }
 
+              func playSong(_ url: URL) {
+                  stopPlayback()
+                  guard localAudio else { status = "Imported song playback currently requires internal audio"; return }
+                  do { try configureAudio() } catch { status = error.localizedDescription; return }
+                  var sequence: MusicSequence?
+                  guard NewMusicSequence(&sequence) == noErr, let sequence else { status = "Cannot create MIDI sequence"; return }
+                  guard MusicSequenceFileLoad(sequence, url as CFURL, .midiType, []) == noErr else {
+                      DisposeMusicSequence(sequence); status = "Cannot read MIDI song"; return
+                  }
+                  var count: UInt32 = 0
+                  MusicSequenceGetTrackCount(sequence, &count)
+                  var events: [(Double, UInt8, UInt8, Bool)] = []
+                  for index in 0..<count {
+                      var track: MusicTrack?
+                      guard MusicSequenceGetIndTrack(sequence, index, &track) == noErr, let track else { continue }
+                      var iterator: MusicEventIterator?
+                      guard NewMusicEventIterator(track, &iterator) == noErr, let iterator else { continue }
+                      defer { DisposeMusicEventIterator(iterator) }
+                      var hasEvent: DarwinBoolean = false
+                      MusicEventIteratorHasCurrentEvent(iterator, &hasEvent)
+                      while hasEvent.boolValue {
+                          var beat: MusicTimeStamp = 0
+                          var type: MusicEventType = 0
+                          var data: UnsafeRawPointer?
+                          var size: UInt32 = 0
+                          MusicEventIteratorGetEventInfo(iterator, &beat, &type, &data, &size)
+                          if type == kMusicEventType_MIDINoteMessage, let data, size >= UInt32(MemoryLayout<MIDINoteMessage>.size) {
+                              let n = data.load(as: MIDINoteMessage.self)
+                              var start: Float64 = 0, end: Float64 = 0
+                              if n.channel != 9, MusicSequenceGetSecondsForBeats(sequence, beat, &start) == noErr,
+                                 MusicSequenceGetSecondsForBeats(sequence, beat + Double(n.duration), &end) == noErr,
+                                 start.isFinite, end.isFinite, start >= 0, end >= start {
+                                  events.append((start, n.note, n.velocity, true))
+                                  events.append((end, n.note, 0, false))
+                              }
+                          }
+                          MusicEventIteratorNextEvent(iterator)
+                          MusicEventIteratorHasCurrentEvent(iterator, &hasEvent)
+                      }
+                  }
+                  DisposeMusicSequence(sequence)
+                  guard !events.isEmpty else { status = "No playable MIDI notes"; return }
+                  events.sort { $0.0 == $1.0 ? (!$0.3 && $1.3) : $0.0 < $1.0 }
+                  let timeline = events
+                  let generation = playbackGeneration
+                  let origin = ProcessInfo.processInfo.systemUptime
+                  var counts: [UInt8: Int] = [:]
+                  isPlaying = true
+                  func advance(_ index: Int) {
+                      guard generation == self.playbackGeneration else { return }
+                      var i = index
+                      let elapsed = ProcessInfo.processInfo.systemUptime - origin
+                      while i < timeline.count && timeline[i].0 <= elapsed + 0.002 {
+                          let (_, note, velocity, on) = timeline[i]
+                          if on {
+                              counts[note, default: 0] += 1
+                              self.sounding.insert(note)
+                              self.sampler.startNote(note, withVelocity: velocity, onChannel: 0)
+                          } else if let count = counts[note] {
+                              if count <= 1 {
+                                  counts.removeValue(forKey: note)
+                                  self.sounding.remove(note)
+                                  self.sampler.stopNote(note, onChannel: 0)
+                              } else { counts[note] = count - 1 }
+                          }
+                          i += 1
+                      }
+                      self.playbackNotes = Set(self.sounding.map(Int.init))
+                      if i == timeline.count { self.stopPlayback(); return }
+                      let next = i
+                      DispatchQueue.main.asyncAfter(deadline: .now() + max(0, timeline[next].0 - (ProcessInfo.processInfo.systemUptime - origin))) { advance(next) }
+                  }
+                  advance(0)
+              }
               private var playbackGeneration = 0
               private var sounding: Set<UInt8> = []
               private var playbackDestination: MIDIEndpointRef?
@@ -469,12 +543,15 @@ workflows:
                           Button("Import MIDI file") { importingMIDI = true }
                           if !importError.isEmpty { Text(importError).foregroundStyle(.red) }
                           ForEach(importedSongs, id: \.self) { song in
-                              Text(song.deletingPathExtension().lastPathComponent)
+                              Button(song.deletingPathExtension().lastPathComponent) { midi.playSong(song) }
                           }
-                          Text("Imported files are stored on this device. Song playback and notation are not yet available.").font(.footnote).foregroundStyle(.secondary)
+                          Button("Stop", role: .destructive) { midi.stopPlayback() }
+                          KeyboardView(activeNotes: midi.playbackNotes).frame(height: 120)
+                          Text(midi.status).font(.caption)
+                          Text("Experimental internal MIDI playback. Notation and external song playback are not yet available.").font(.footnote).foregroundStyle(.secondary)
                       }
                       .navigationTitle("MIDI Music Library")
-                      .toolbar { Button("Done") { musicLibrary = false } }
+                      .toolbar { Button("Done") { midi.stopPlayback(); musicLibrary = false } }
                       .onAppear { refreshSongs() }
                       .fileImporter(isPresented: $importingMIDI, allowedContentTypes: [.midi], allowsMultipleSelection: true) { result in
                           do {
