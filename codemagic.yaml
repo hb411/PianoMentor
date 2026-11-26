@@ -757,15 +757,18 @@ workflows:
                       ([0,3,7,10,2,5,9], "m13"), ([0,3,6,9], "dim7"),
                       ([0,3,6,10], "m7♭5"), ([0,4,7,2], "add9")
                   ]
-                  for root in 0..<12 {
+                  let bass = (notes.min() ?? 0) % 12
+                  let roots = [bass] + (0..<12).filter { $0 != bass }
+                  var matches: [String] = []
+                  for root in roots {
                       let relative = Set(pcs.map { ($0 - root + 12) % 12 })
                       for (pattern, quality) in patterns where relative == pattern {
-                          if quality == "major" { return "\(names[root]) major" }
-                          if quality == "minor" { return "\(names[root]) minor" }
-                          if quality == "m7" { return "\(names[root]) minor 7" }
-                          return "\(names[root]) \(quality)"
+                          let suffix = quality == "major" ? " major" : quality == "minor" ? " minor" : quality
+                          let inversion = root == bass ? "" : "/" + names[bass]
+                          matches.append(names[root] + suffix + inversion)
                       }
                   }
+                  if !matches.isEmpty { return matches.joined(separator: " · ") }
                   return nil
               }
 
