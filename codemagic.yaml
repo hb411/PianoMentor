@@ -404,6 +404,7 @@ workflows:
           cat > PianoMentor/ContentView.swift <<'SWIFT'
           import SwiftUI
           import CoreMIDI
+          import UniformTypeIdentifiers
 
           struct ContentView: View {
               @EnvironmentObject var midi: MIDIManager
@@ -411,6 +412,52 @@ workflows:
               @AppStorage("appearanceMode") private var appearanceMode = 0
               @AppStorage("keyHighlight") private var keyHighlight = 0
               @State private var settings = false
+              @State private var musicLibrary = false
+              @State private var importingMIDI = false
+              @State private var importedSongs: [URL] = []
+              @State private var importError = ""
+              private var musicFolder: URL {
+                  FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MIDI Library", isDirectory: true)
+              }
+              private func refreshSongs() {
+                  importedSongs = ((try? FileManager.default.contentsOfDirectory(at: musicFolder, includingPropertiesForKeys: nil)) ?? []).filter { ["mid", "midi"].contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+              }
+              private func importSong(_ url: URL) throws {
+                  let access = url.startAccessingSecurityScopedResource()
+                  defer { if access { url.stopAccessingSecurityScopedResource() } }
+                  let data = try Data(contentsOf: url)
+                  guard data.count >= 14, data.prefix(4) == Data([77,84,104,100]) else {
+                      throw NSError(domain: "PianoMentor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a standard MIDI file"])
+                  }
+                  try FileManager.default.createDirectory(at: musicFolder, withIntermediateDirectories: true)
+                  var target = musicFolder.appendingPathComponent(url.lastPathComponent)
+                  if FileManager.default.fileExists(atPath: target.path) {
+                      target = musicFolder.appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent)
+                  }
+                  try data.write(to: target, options: .atomic)
+                  refreshSongs()
+              }
+              private var musicLibraryView: some View {
+                  NavigationStack {
+                      List {
+                          Button("Import MIDI file") { importingMIDI = true }
+                          if !importError.isEmpty { Text(importError).foregroundStyle(.red) }
+                          ForEach(importedSongs, id: \.self) { song in
+                              Text(song.deletingPathExtension().lastPathComponent)
+                          }
+                          Text("Imported files are stored on this device. Song playback and notation are not yet available.").font(.footnote).foregroundStyle(.secondary)
+                      }
+                      .navigationTitle("MIDI Music Library")
+                      .toolbar { Button("Done") { musicLibrary = false } }
+                      .onAppear { refreshSongs() }
+                      .fileImporter(isPresented: $importingMIDI, allowedContentTypes: [.midi], allowsMultipleSelection: true) { result in
+                          do {
+                              importError = ""
+                              for url in try result.get() { try importSong(url) }
+                          } catch { importError = error.localizedDescription }
+                      }
+                  }
+              }
               @State private var root = 0
               @State private var quality = 0
               @State private var inversion = 0
@@ -510,6 +557,7 @@ workflows:
                       HStack {
                           Button("Settings") { settings = true }
                           Button("Chord Library") { library = true }
+                          Button("MIDI Library") { musicLibrary = true }
                           Button("Play C major chord") { midi.playChord() }
                           Button("Play short passage") { midi.playPassage() }
                           Button("Stop", role: .destructive) { midi.stopPlayback() }
@@ -538,6 +586,7 @@ workflows:
                   }
                   .padding()
                   .sheet(isPresented: $library) { chordLibrary }
+                  .sheet(isPresented: $musicLibrary) { musicLibraryView }
                   .sheet(isPresented: $settings) {
                       NavigationStack {
                           Form {
