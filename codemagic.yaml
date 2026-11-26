@@ -146,6 +146,8 @@ workflows:
           import Foundation
           import CoreMIDI
           import Combine
+          import AVFoundation
+          import AudioToolbox
 
           final class MIDIManager: ObservableObject {
               @Published var activeNotes: Set<Int> = []
@@ -277,6 +279,30 @@ workflows:
                   stopPlayback()
                   selectedDestination = endpoint
               }
+              @Published var localAudio = false
+              @Published var instrument = 0
+              @Published var volume: Float = 0.8
+              private let engine = AVAudioEngine()
+              private let sampler = AVAudioUnitSampler()
+              private var audioReady = false
+
+              func configureAudio() throws {
+                  if !audioReady {
+                      engine.attach(sampler)
+                      engine.connect(sampler, to: engine.mainMixerNode, format: nil)
+                      audioReady = true
+                  }
+                  try AVAudioSession.sharedInstance().setCategory(.playback)
+                  try AVAudioSession.sharedInstance().setActive(true)
+                  if !engine.isRunning { try engine.start() }
+                  engine.mainMixerNode.outputVolume = volume
+              }
+
+              func setLocalAudio(_ enabled: Bool) {
+                  stopPlayback()
+                  localAudio = enabled
+              }
+
               private var playbackGeneration = 0
               private var sounding: Set<UInt8> = []
               private var playbackDestination: MIDIEndpointRef?
@@ -289,6 +315,11 @@ workflows:
                   playbackGeneration += 1
                   if let dest = playbackDestination {
                       for note in sounding { send(status: 0x80, note: note, velocity: 0, to: dest) }
+                  }
+                  if localAudio {
+                      for note in sounding { sampler.stopNote(note, onChannel: 0) }
+                      sampler.sendController(64, withValue: 0, onChannel: 0)
+                      sampler.sendController(123, withValue: 0, onChannel: 0)
                   }
                   sounding.removeAll()
                   playbackNotes = []
@@ -303,19 +334,27 @@ workflows:
 
               func playSequence(_ steps: [[UInt8]], duration: Double = 0.7) {
                   stopPlayback()
-                  guard MIDIGetNumberOfDestinations() > 0 else { status = "No MIDI destination"; return }
+                  let local = localAudio
                   let dest = selectedDestination ?? MIDIGetDestination(0)
-                  guard destinationIDs.contains(dest) else { status = "MIDI destination unavailable"; return }
-                  playbackDestination = dest
+                  if local {
+                      do { try configureAudio() }
+                      catch { status = "Audio unavailable: \(error.localizedDescription)"; return }
+                  } else {
+                      guard MIDIGetNumberOfDestinations() > 0, destinationIDs.contains(dest) else { status = "MIDI destination unavailable"; return }
+                      playbackDestination = dest
+                  }
                   isPlaying = true
                   let generation = playbackGeneration
-                  let delay = visualDelay
+                  let delay = local ? 0 : visualDelay
                   func advance(_ index: Int) {
                       guard generation == self.playbackGeneration else { return }
                       guard index < steps.count else { self.stopPlayback(); return }
                       self.sounding = Set(steps[index])
                       let visualNotes = Set(steps[index].map(Int.init))
-                      for note in self.sounding { self.send(status: 0x90, note: note, velocity: 75, to: dest) }
+                      for note in self.sounding {
+                          if local { self.sampler.startNote(note, withVelocity: 75, onChannel: 0) }
+                          else { self.send(status: 0x90, note: note, velocity: 75, to: dest) }
+                      }
                       DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                           guard let self, generation == self.playbackGeneration else { return }
                           self.playbackNotes = visualNotes
@@ -323,7 +362,10 @@ workflows:
                       }
                       DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
                           guard let self, generation == self.playbackGeneration else { return }
-                          for note in self.sounding { self.send(status: 0x80, note: note, velocity: 0, to: dest) }
+                          for note in self.sounding {
+                              if local { self.sampler.stopNote(note, onChannel: 0) }
+                              else { self.send(status: 0x80, note: note, velocity: 0, to: dest) }
+                          }
                           self.sounding.removeAll()
                           // Keep the just-played notes visible through the Disklavier's mechanical release.
                           // The next step replaces them; the final step remains as a playback result until
@@ -461,7 +503,7 @@ workflows:
                           .frame(height: 190).padding(.horizontal)
 
                       Button { midi.playC4() } label: {
-                          Label("Play C4 on Yamaha", systemImage: "pianokeys")
+                          Label(midi.localAudio ? "Play C4 locally" : "Play C4 on Yamaha", systemImage: "pianokeys")
                               .font(.title2.bold()).frame(maxWidth: 420).padding()
                       }.buttonStyle(.borderedProminent)
 
@@ -494,11 +536,12 @@ workflows:
                           Button("Refresh MIDI") { midi.refresh() }
                       }.font(.footnote).padding(.bottom)
                   }
-                  .padding().preferredColorScheme(.light)
+                  .padding()
                   .sheet(isPresented: $library) { chordLibrary }
                   .sheet(isPresented: $settings) {
                       NavigationStack {
                           Form {
+                              Toggle("Internal audio (experimental)", isOn: Binding(get: { midi.localAudio }, set: { midi.setLocalAudio($0) }))
                               Picker("Appearance", selection: $appearanceMode) {
                                   Text("System").tag(0)
                                   Text("Light").tag(1)
