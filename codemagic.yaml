@@ -610,6 +610,7 @@ workflows:
                                   Text("Light").tag(1)
                                   Text("Dark").tag(2)
                               }
+                              KeyboardRangeSettings()
                               Picker("Key highlight", selection: $keyHighlight) {
                                   Text("Blue").tag(0)
                                   Text("Green").tag(1)
@@ -662,11 +663,37 @@ workflows:
               }
           }
 
+          struct KeyboardRangeSettings: View {
+              @AppStorage("keyboardOctaves") private var octaves = 0
+              @AppStorage("keyboardStartOctave") private var startOctave = 3
+              var body: some View {
+                  Picker("Keyboard range", selection: $octaves) {
+                      Text("88 keys").tag(0)
+                      Text("4 octaves").tag(4)
+                      Text("3 octaves").tag(3)
+                      Text("2 octaves").tag(2)
+                  }
+                  if [2,3,4].contains(octaves) {
+                      Picker("Starting octave", selection: $startOctave) {
+                          ForEach(1...(8 - octaves), id: \.self) { Text("C\($0)").tag($0) }
+                      }
+                      .onAppear { startOctave = min(8 - octaves, max(1, startOctave)) }
+                      .onChange(of: octaves) { _, value in
+                          if [2,3,4].contains(value) { startOctave = min(8 - value, max(1, startOctave)) }
+                      }
+                  }
+              }
+          }
+
           struct KeyboardView: View {
               let activeNotes: Set<Int>
               @AppStorage("keyHighlight") private var keyHighlight = 0
               private var highlight: Color { [Color.blue, .green, .orange, .purple, .red, .teal][min(5, max(0, keyHighlight))] }
-              private let start = 21, end = 108
+              @AppStorage("keyboardOctaves") private var keyboardOctaves = 0
+              @AppStorage("keyboardStartOctave") private var keyboardStartOctave = 3
+              private var span: Int { [2,3,4].contains(keyboardOctaves) ? keyboardOctaves : 0 }
+              private var start: Int { span == 0 ? 21 : 12 * (min(8 - span, max(1, keyboardStartOctave)) + 1) }
+              private var end: Int { span == 0 ? 108 : min(108, start + span * 12 - 1) }
               private let black = Set([1,3,6,8,10])
               var body: some View {
                   GeometryReader { geo in
