@@ -162,7 +162,20 @@ workflows:
               private var inputPort = MIDIPortRef()
               private var outputPort = MIDIPortRef()
 
-              init() { setup() }
+              private var interruptionObserver: NSObjectProtocol?
+              init() {
+                  setup()
+                  interruptionObserver = NotificationCenter.default.addObserver(
+                      forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+                  ) { [weak self] notification in
+                      guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                            AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+                      self?.stopPlayback()
+                  }
+              }
+              deinit {
+                  if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+              }
 
               func refresh() { scanAndConnect() }
 
@@ -320,6 +333,11 @@ workflows:
                   try AVAudioSession.sharedInstance().setActive(true)
                   if !engine.isRunning { try engine.start() }
                   engine.mainMixerNode.outputVolume = volume
+              }
+
+              func setVolume(_ value: Float) {
+                  volume = min(1, max(0, value))
+                  if audioReady { engine.mainMixerNode.outputVolume = volume }
               }
 
               func setLocalAudio(_ enabled: Bool) {
@@ -718,6 +736,10 @@ workflows:
                       NavigationStack {
                           Form {
                               Toggle("Internal audio (experimental)", isOn: Binding(get: { midi.localAudio }, set: { midi.setLocalAudio($0) }))
+                              HStack {
+                                  Text("Local volume")
+                                  Slider(value: Binding(get: { Double(midi.volume) }, set: { midi.setVolume(Float($0)) }), in: 0...1)
+                              }
                               Picker("Appearance", selection: $appearanceMode) {
                                   Text("System").tag(0)
                                   Text("Light").tag(1)
@@ -738,6 +760,7 @@ workflows:
                   .preferredColorScheme(appearanceMode == 1 ? .light : appearanceMode == 2 ? .dark : nil)
                   .tint([Color.blue, .green, .orange, .purple, .red, .teal][min(5, max(0, keyHighlight))])
                   .onDisappear { midi.stopPlayback() }
+                  .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in midi.stopPlayback() }
               }
 
               private func chordName(_ notes: Set<Int>) -> String? {
