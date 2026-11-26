@@ -361,7 +361,7 @@ workflows:
                   }
                   var count: UInt32 = 0
                   MusicSequenceGetTrackCount(sequence, &count)
-                  var events: [(Double, UInt8, UInt8, Bool)] = []
+                  var events: [(Double, UInt8, UInt8, UInt8)] = []
                   for index in 0..<count {
                       var track: MusicTrack?
                       guard MusicSequenceGetIndTrack(sequence, index, &track) == noErr, let track else { continue }
@@ -382,8 +382,16 @@ workflows:
                               if n.channel != 9, n.note <= 127, n.velocity > 0, n.duration > 0, MusicSequenceGetSecondsForBeats(sequence, beat, &start) == noErr,
                                  MusicSequenceGetSecondsForBeats(sequence, beat + Double(n.duration), &end) == noErr,
                                  start.isFinite, end.isFinite, start >= 0, end >= start {
-                                  events.append((start, n.note, n.velocity, true))
-                                  events.append((end, n.note, 0, false))
+                                  events.append((start, n.note, n.velocity, 0x90))
+                                  events.append((end, n.note, 0, 0x80))
+                              }
+                          }
+                          if type == kMusicEventType_MIDIChannelMessage, let data, size >= UInt32(MemoryLayout<MIDIChannelMessage>.size) {
+                              let message = data.load(as: MIDIChannelMessage.self)
+                              var seconds: Float64 = 0
+                              if message.status & 0xF0 == 0xB0, message.status & 0x0F != 9, message.data1 == 64,
+                                 MusicSequenceGetSecondsForBeats(sequence, beat, &seconds) == noErr, seconds.isFinite, seconds >= 0 {
+                                  events.append((seconds, 64, min(message.data2, 127), 0xB0))
                               }
                           }
                           MusicEventIteratorNextEvent(iterator)
@@ -392,7 +400,7 @@ workflows:
                   }
                   DisposeMusicSequence(sequence)
                   guard !events.isEmpty else { status = "No playable MIDI notes"; return }
-                  events.sort { $0.0 == $1.0 ? (!$0.3 && $1.3) : $0.0 < $1.0 }
+                  events.sort { $0.0 == $1.0 ? ($0.3 == 0xB0 ? $1.3 != 0xB0 : $0.3 == 0x80 && $1.3 == 0x90) : $0.0 < $1.0 }
                   let timeline = events
                   if !local { playbackDestination = dest }
                   let generation = playbackGeneration
@@ -404,8 +412,11 @@ workflows:
                       var i = index
                       let elapsed = ProcessInfo.processInfo.systemUptime - origin
                       while i < timeline.count && timeline[i].0 <= elapsed + 0.002 {
-                          let (_, note, velocity, on) = timeline[i]
-                          if on {
+                          let (_, note, velocity, command) = timeline[i]
+                          if command == 0xB0 {
+                              if local { self.sampler.sendController(64, withValue: velocity, onChannel: 0) }
+                              else { self.send(status: 0xB0, note: 64, velocity: velocity, to: dest) }
+                          } else if command == 0x90 {
                               counts[note, default: 0] += 1
                               self.sounding.insert(note)
                               if local { self.sampler.startNote(note, withVelocity: velocity, onChannel: 0) }
