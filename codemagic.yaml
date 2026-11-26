@@ -285,6 +285,30 @@ workflows:
               private let engine = AVAudioEngine()
               private let sampler = AVAudioUnitSampler()
               private var audioReady = false
+              private var touchNotes: Set<UInt8> = []
+              private var touchDestination: MIDIEndpointRef?
+              func touchOn(_ note: UInt8) {
+                  guard !touchNotes.contains(note) else { return }
+                  if isPlaying { stopPlayback() }
+                  if localAudio {
+                      do { try configureAudio() } catch { status = error.localizedDescription; return }
+                      sampler.startNote(note, withVelocity: 85, onChannel: 0)
+                  } else {
+                      guard MIDIGetNumberOfDestinations() > 0 else { status = "Select internal audio in Settings"; return }
+                      let dest = touchDestination ?? selectedDestination ?? MIDIGetDestination(0)
+                      touchDestination = dest
+                      send(status: 0x90, note: note, velocity: 85, to: dest)
+                  }
+                  touchNotes.insert(note)
+                  playbackNotes = Set(touchNotes.map(Int.init))
+              }
+              func touchOff(_ note: UInt8) {
+                  guard touchNotes.remove(note) != nil else { return }
+                  if localAudio { sampler.stopNote(note, onChannel: 0) }
+                  else if let dest = touchDestination { send(status: 0x80, note: note, velocity: 0, to: dest) }
+                  if touchNotes.isEmpty { touchDestination = nil }
+                  playbackNotes = Set(touchNotes.map(Int.init))
+              }
 
               func configureAudio() throws {
                   if !audioReady {
@@ -312,6 +336,7 @@ workflows:
               @Published var lastPlaybackNotes: Set<Int> = []
 
               func stopPlayback() {
+                  for note in Array(touchNotes) { touchOff(note) }
                   playbackGeneration += 1
                   if let dest = playbackDestination {
                       for note in sounding { send(status: 0x80, note: note, velocity: 0, to: dest) }
@@ -405,6 +430,7 @@ workflows:
           import SwiftUI
           import CoreMIDI
           import UniformTypeIdentifiers
+          import UIKit
 
           struct ContentView: View {
               @EnvironmentObject var midi: MIDIManager
@@ -560,7 +586,7 @@ workflows:
                       Text(midi.lastNote == nil ? "Play a key on the Yamaha" : "MIDI note \(midi.lastNote!) · velocity \(midi.lastVelocity)")
                           .font(.title3).foregroundStyle(.secondary)
 
-                      KeyboardView(activeNotes: midi.activeNotes.union(midi.playbackNotes))
+                      KeyboardView(activeNotes: midi.activeNotes.union(midi.playbackNotes), onDown: { midi.touchOn(UInt8($0)) }, onUp: { midi.touchOff(UInt8($0)) })
                           .frame(height: 190).padding(.horizontal)
 
                       Button { midi.playC4() } label: {
@@ -663,6 +689,64 @@ workflows:
               }
           }
 
+          struct PianoTouchSurface: UIViewRepresentable {
+              let whites: [Int]
+              let blackNotes: [Int]
+              let down: (Int) -> Void
+              let up: (Int) -> Void
+              func makeUIView(context: Context) -> Surface {
+                  let v = Surface()
+                  v.isMultipleTouchEnabled = true
+                  v.backgroundColor = .clear
+                  return v
+              }
+              func updateUIView(_ v: Surface, context: Context) {
+                  if v.whites != whites { v.releaseAll() }
+                  v.whites = whites; v.blackNotes = blackNotes
+                  v.down = down; v.up = up
+              }
+              static func dismantleUIView(_ v: Surface, coordinator: ()) { v.releaseAll() }
+              final class Surface: UIView {
+                  var whites: [Int] = []
+                  var blackNotes: [Int] = []
+                  var down: ((Int) -> Void)?
+                  var up: ((Int) -> Void)?
+                  var held: [ObjectIdentifier: Int] = [:]
+                  func note(at p: CGPoint) -> Int? {
+                      guard !whites.isEmpty, bounds.width > 0, bounds.contains(p) else { return nil }
+                      let w = bounds.width / CGFloat(whites.count)
+                      if p.y < bounds.height * 0.62 {
+                          for n in blackNotes {
+                              if let i = whites.lastIndex(where: { $0 < n }), abs(p.x - CGFloat(i + 1) * w) <= w * 0.31 { return n }
+                          }
+                      }
+                      return whites[min(whites.count - 1, max(0, Int(p.x / w)))]
+                  }
+                  func release(_ t: UITouch) {
+                      if let n = held.removeValue(forKey: ObjectIdentifier(t)), !held.values.contains(n) { up?(n) }
+                  }
+                  func move(_ t: UITouch) {
+                      let id = ObjectIdentifier(t)
+                      let n = note(at: t.location(in: self))
+                      if held[id] == n { return }
+                      release(t)
+                      if let n {
+                          let already = held.values.contains(n)
+                          held[id] = n
+                          if !already { down?(n) }
+                      }
+                  }
+                  func releaseAll() {
+                      let notes = Set(held.values); held.removeAll()
+                      for n in notes { up?(n) }
+                  }
+                  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { for t in touches { move(t) } }
+                  override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { for t in touches { move(t) } }
+                  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { for t in touches { release(t) } }
+                  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { for t in touches { release(t) } }
+              }
+          }
+
           struct KeyboardRangeSettings: View {
               @AppStorage("keyboardOctaves") private var octaves = 0
               @AppStorage("keyboardStartOctave") private var startOctave = 3
@@ -687,6 +771,8 @@ workflows:
 
           struct KeyboardView: View {
               let activeNotes: Set<Int>
+              var onDown: ((Int) -> Void)? = nil
+              var onUp: ((Int) -> Void)? = nil
               @AppStorage("keyHighlight") private var keyHighlight = 0
               private var highlight: Color { [Color.blue, .green, .orange, .purple, .red, .teal][min(5, max(0, keyHighlight))] }
               @AppStorage("keyboardOctaves") private var keyboardOctaves = 0
@@ -719,6 +805,9 @@ workflows:
                                       .frame(width: w * 0.62, height: geo.size.height * 0.62)
                                       .offset(x: CGFloat(wi + 1) * w - w * 0.31)
                               }
+                          }
+                          if let onDown, let onUp {
+                              PianoTouchSurface(whites: whites, blackNotes: (start...end).filter { black.contains($0 % 12) }, down: onDown, up: onUp)
                           }
                       }.clipShape(RoundedRectangle(cornerRadius: 8))
                   }
