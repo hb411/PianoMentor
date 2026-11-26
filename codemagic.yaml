@@ -329,8 +329,13 @@ workflows:
 
               func playSong(_ url: URL) {
                   stopPlayback()
-                  guard localAudio else { status = "Imported song playback currently requires internal audio"; return }
-                  do { try configureAudio() } catch { status = error.localizedDescription; return }
+                  let local = localAudio
+                  let dest = selectedDestination ?? MIDIGetDestination(0)
+                  if local {
+                      do { try configureAudio() } catch { status = error.localizedDescription; return }
+                  } else {
+                      guard MIDIGetNumberOfDestinations() > 0, destinationIDs.contains(dest) else { status = "MIDI destination unavailable"; return }
+                  }
                   var sequence: MusicSequence?
                   guard NewMusicSequence(&sequence) == noErr, let sequence else { status = "Cannot create MIDI sequence"; return }
                   guard MusicSequenceFileLoad(sequence, url as CFURL, .midiType, []) == noErr else {
@@ -356,7 +361,7 @@ workflows:
                           if type == kMusicEventType_MIDINoteMessage, let data, size >= UInt32(MemoryLayout<MIDINoteMessage>.size) {
                               let n = data.load(as: MIDINoteMessage.self)
                               var start: Float64 = 0, end: Float64 = 0
-                              if n.channel != 9, MusicSequenceGetSecondsForBeats(sequence, beat, &start) == noErr,
+                              if n.channel != 9, n.note <= 127, n.velocity > 0, n.duration > 0, MusicSequenceGetSecondsForBeats(sequence, beat, &start) == noErr,
                                  MusicSequenceGetSecondsForBeats(sequence, beat + Double(n.duration), &end) == noErr,
                                  start.isFinite, end.isFinite, start >= 0, end >= start {
                                   events.append((start, n.note, n.velocity, true))
@@ -371,6 +376,7 @@ workflows:
                   guard !events.isEmpty else { status = "No playable MIDI notes"; return }
                   events.sort { $0.0 == $1.0 ? (!$0.3 && $1.3) : $0.0 < $1.0 }
                   let timeline = events
+                  if !local { playbackDestination = dest }
                   let generation = playbackGeneration
                   let origin = ProcessInfo.processInfo.systemUptime
                   var counts: [UInt8: Int] = [:]
@@ -384,12 +390,14 @@ workflows:
                           if on {
                               counts[note, default: 0] += 1
                               self.sounding.insert(note)
-                              self.sampler.startNote(note, withVelocity: velocity, onChannel: 0)
+                              if local { self.sampler.startNote(note, withVelocity: velocity, onChannel: 0) }
+                              else { self.send(status: 0x90, note: note, velocity: velocity, to: dest) }
                           } else if let count = counts[note] {
                               if count <= 1 {
                                   counts.removeValue(forKey: note)
                                   self.sounding.remove(note)
-                                  self.sampler.stopNote(note, onChannel: 0)
+                                  if local { self.sampler.stopNote(note, onChannel: 0) }
+                                  else { self.send(status: 0x80, note: note, velocity: 0, to: dest) }
                               } else { counts[note] = count - 1 }
                           }
                           i += 1
@@ -414,6 +422,8 @@ workflows:
                   playbackGeneration += 1
                   if let dest = playbackDestination {
                       for note in sounding { send(status: 0x80, note: note, velocity: 0, to: dest) }
+                      send(status: 0xB0, note: 64, velocity: 0, to: dest)
+                      send(status: 0xB0, note: 123, velocity: 0, to: dest)
                   }
                   if localAudio {
                       for note in sounding { sampler.stopNote(note, onChannel: 0) }
@@ -548,7 +558,7 @@ workflows:
                           Button("Stop", role: .destructive) { midi.stopPlayback() }
                           KeyboardView(activeNotes: midi.playbackNotes).frame(height: 120)
                           Text(midi.status).font(.caption)
-                          Text("Experimental internal MIDI playback. Notation and external song playback are not yet available.").font(.footnote).foregroundStyle(.secondary)
+                          Text("Experimental MIDI playback uses the selected audio or MIDI output. Notation is not yet available.").font(.footnote).foregroundStyle(.secondary)
                       }
                       .navigationTitle("MIDI Music Library")
                       .toolbar { Button("Done") { midi.stopPlayback(); musicLibrary = false } }
