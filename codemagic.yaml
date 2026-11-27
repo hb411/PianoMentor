@@ -968,9 +968,11 @@ workflows:
               }
               var body: some View {
                   Canvas { context, size in
-                      let spacing = size.height / 26
-                      let center = size.height / 2
-                      func y(_ degree: Int) -> CGFloat { center - CGFloat(degree - 28) * spacing }
+                      let visible = notes.sorted().filter { (21...108).contains($0) }
+                      let low = min(16, visible.map { step($0) }.min() ?? 16)
+                      let high = max(40, visible.map { step($0) }.max() ?? 40)
+                      let spacing = size.height / CGFloat(high - low + 4)
+                      func y(_ degree: Int) -> CGFloat { CGFloat(high - degree + 2) * spacing }
                       func line(_ x1: CGFloat, _ x2: CGFloat, _ degree: Int) {
                           var path = Path()
                           path.move(to: CGPoint(x: x1, y: y(degree)))
@@ -982,11 +984,16 @@ workflows:
                       }
                       context.draw(Text("𝄞").font(.system(size: 27)), at: CGPoint(x: 15, y: y(34)))
                       context.draw(Text("𝄢").font(.system(size: 27)), at: CGPoint(x: 15, y: y(22)))
-                      let visible = notes.sorted().filter { (16...40).contains(step($0)) }
                       for (index, note) in visible.enumerated() {
                           let degree = step(note)
                           let x = 48 + CGFloat(index) * max(1, (size.width - 65) / CGFloat(max(1, visible.count)))
-                          if degree == 28 || degree == 16 || degree == 40 { line(x - 9, x + 9, degree) }
+                          if degree == 28 { line(x - 9, x + 9, degree) }
+                          if degree <= 16 {
+                              for ledger in stride(from: 16, through: degree, by: -2) { line(x - 9, x + 9, ledger) }
+                          }
+                          if degree >= 40 {
+                              for ledger in stride(from: 40, through: degree, by: 2) { line(x - 9, x + 9, ledger) }
+                          }
                           let rect = CGRect(x: x - 5, y: y(degree) - 3.5, width: 10, height: 7)
                           context.fill(Path(ellipseIn: rect), with: .foreground)
                           if [1,3,6,8,10].contains(note % 12) {
@@ -994,7 +1001,7 @@ workflows:
                           }
                       }
                   }
-                  .accessibilityLabel("Live pitch staff, middle register")
+                  .accessibilityLabel("Live pitch staff, full piano range")
               }
           }
 
