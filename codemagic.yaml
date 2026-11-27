@@ -402,8 +402,21 @@ workflows:
                       }
                   }
                   DisposeMusicSequence(sequence)
-                  guard !events.isEmpty else { status = "No playable MIDI notes"; return }
-                  events.sort { $0.0 == $1.0 ? (($0.3 & 0xF0) == 0xB0 ? ($1.3 & 0xF0) != 0xB0 : ($0.3 & 0xF0) == 0x80 && ($1.3 & 0xF0) == 0x90) : $0.0 < $1.0 }
+                  guard events.contains(where: { $0.3 & 0xF0 == 0x90 }) else { status = "No playable MIDI notes"; return }
+                  // Preserve source order within each event class at equal timestamps.
+                  // Release notes before retriggering; apply pedal changes first.
+                  func eventPriority(_ status: UInt8) -> Int {
+                      switch status & 0xF0 {
+                      case 0xB0: return 0
+                      case 0x80: return 1
+                      default: return 2
+                      }
+                  }
+                  events = events.enumerated().sorted { lhs, rhs in
+                      if lhs.element.0 != rhs.element.0 { return lhs.element.0 < rhs.element.0 }
+                      let lp = eventPriority(lhs.element.3), rp = eventPriority(rhs.element.3)
+                      return lp == rp ? lhs.offset < rhs.offset : lp < rp
+                  }.map { $0.element }
                   let speed = min(2.0, max(0.25, songTempo))
                   let timeline = events.map { ($0.0 / speed, $0.1, $0.2, $0.3) }
                   playbackUsesLocal = local
