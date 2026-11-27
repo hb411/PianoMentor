@@ -331,9 +331,11 @@ workflows:
                       engine.connect(sampler, to: engine.mainMixerNode, format: nil)
                       audioReady = true
                   }
-                  try AVAudioSession.sharedInstance().setCategory(.playback)
-                  try AVAudioSession.sharedInstance().setActive(true)
-                  if !engine.isRunning { try engine.start() }
+                  if !engine.isRunning {
+                      try AVAudioSession.sharedInstance().setCategory(.playback)
+                      try AVAudioSession.sharedInstance().setActive(true)
+                      try engine.start()
+                  }
                   engine.mainMixerNode.outputVolume = volume
               }
 
@@ -577,8 +579,8 @@ workflows:
                       _ = MIDIEventListAdd(&list, MemoryLayout<MIDIEventList>.size, packet, 0, 1, ptr.baseAddress!)
                   }
                   let result = MIDISendEventList(outputPort, dest, &list)
-                  if status & 0xF0 == 0x90 {
-                      self.status = "MIDI send: \(result) · \(self.name(dest))"
+                  if result != noErr {
+                      self.status = "MIDI send error: \(result)"
                   }
               }
           }
