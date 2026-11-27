@@ -774,7 +774,7 @@ workflows:
                       .padding(.horizontal)
 
                       Spacer()
-                      let shownNotes = midi.activeNotes.isEmpty ? midi.playbackNotes : midi.activeNotes
+                      let shownNotes = midi.activeNotes.union(midi.playbackNotes)
                       if let chord = chordName(shownNotes) {
                           Text(chord).font(.title.bold())
                       }
@@ -782,6 +782,7 @@ workflows:
                       Text(midi.lastNote == nil ? "Play a key on the Yamaha" : "MIDI note \(midi.lastNote!) · velocity \(midi.lastVelocity)")
                           .font(.title3).foregroundStyle(.secondary)
 
+                      LivePitchStaff(notes: shownNotes).frame(height: 120).padding(.horizontal)
                       KeyboardView(activeNotes: midi.activeNotes.union(midi.playbackNotes), onDown: { midi.touchOn(UInt8($0)) }, onUp: { midi.touchOff(UInt8($0)) })
                           .frame(height: 190).padding(.horizontal)
 
