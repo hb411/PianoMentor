@@ -347,6 +347,7 @@ workflows:
                   localAudio = enabled
               }
 
+              @Published var songTempo = 1.0
               func playSong(_ url: URL) {
                   stopPlayback()
                   let local = localAudio
@@ -403,7 +404,8 @@ workflows:
                   DisposeMusicSequence(sequence)
                   guard !events.isEmpty else { status = "No playable MIDI notes"; return }
                   events.sort { $0.0 == $1.0 ? ($0.3 == 0xB0 ? $1.3 != 0xB0 : $0.3 == 0x80 && $1.3 == 0x90) : $0.0 < $1.0 }
-                  let timeline = events
+                  let speed = min(2.0, max(0.25, songTempo))
+                  let timeline = events.map { ($0.0 / speed, $0.1, $0.2, $0.3) }
                   playbackUsesLocal = local
                   if !local { playbackDestination = dest }
                   let generation = playbackGeneration
@@ -584,13 +586,41 @@ workflows:
                   try data.write(to: target, options: .atomic)
                   refreshSongs()
               }
+              @State private var songSearch = ""
+              @AppStorage("favoriteMIDIFiles") private var favoriteMIDIFiles = "[]"
+              @State private var favoritesOnly = false
+              private var favoriteNames: Set<String> {
+                  Set((try? JSONDecoder().decode([String].self, from: Data(favoriteMIDIFiles.utf8))) ?? [])
+              }
+              private func toggleFavorite(_ song: URL) {
+                  var names = favoriteNames
+                  if names.contains(song.lastPathComponent) { names.remove(song.lastPathComponent) }
+                  else { names.insert(song.lastPathComponent) }
+                  if let data = try? JSONEncoder().encode(names.sorted()), let value = String(data: data, encoding: .utf8) { favoriteMIDIFiles = value }
+              }
               private var musicLibraryView: some View {
                   NavigationStack {
                       List {
                           Button("Import MIDI file") { importingMIDI = true }
                           if !importError.isEmpty { Text(importError).foregroundStyle(.red) }
-                          ForEach(importedSongs, id: \.self) { song in
-                              Button(song.deletingPathExtension().lastPathComponent) { midi.playSong(song) }
+                          Toggle("Favorites only", isOn: $favoritesOnly)
+                          HStack {
+                              Text("Tempo")
+                              Slider(value: $midi.songTempo, in: 0.25...2, step: 0.05)
+                              Text("\(Int(midi.songTempo * 100))%").monospacedDigit()
+                          }.disabled(midi.isPlaying)
+                          ForEach(importedSongs.filter { song in
+                              (!favoritesOnly || favoriteNames.contains(song.lastPathComponent)) &&
+                              (songSearch.isEmpty || song.lastPathComponent.localizedCaseInsensitiveContains(songSearch))
+                          }, id: \.self) { song in
+                              HStack {
+                                  Button(song.deletingPathExtension().lastPathComponent) { midi.playSong(song) }
+                                  Spacer()
+                                  Button { toggleFavorite(song) } label: {
+                                      Image(systemName: favoriteNames.contains(song.lastPathComponent) ? "star.fill" : "star")
+                                  }.buttonStyle(.borderless)
+                                  .accessibilityLabel(favoriteNames.contains(song.lastPathComponent) ? "Remove favorite" : "Add favorite")
+                              }
                           }
                           Button("Stop", role: .destructive) { midi.stopPlayback() }
                           KeyboardView(activeNotes: midi.playbackNotes).frame(height: 120)
@@ -598,6 +628,7 @@ workflows:
                           Text("Experimental MIDI playback uses the selected audio or MIDI output. Notation is not yet available.").font(.footnote).foregroundStyle(.secondary)
                       }
                       .navigationTitle("MIDI Music Library")
+                      .searchable(text: $songSearch)
                       .toolbar { Button("Done") { midi.stopPlayback(); musicLibrary = false } }
                       .onAppear { refreshSongs() }
                       .fileImporter(isPresented: $importingMIDI, allowedContentTypes: [.midi], allowsMultipleSelection: true) { result in
