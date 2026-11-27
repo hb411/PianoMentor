@@ -645,9 +645,15 @@ workflows:
                               }
                           }
                           Button("Stop", role: .destructive) { midi.stopPlayback() }
+                          if let chord = chordName(midi.playbackNotes) {
+                              Text(chord).font(.title2.bold())
+                          }
+                          Text(midi.playbackNotes.sorted().map { noteName($0) }.joined(separator: " – "))
+                              .font(.headline).monospacedDigit()
+                          LivePitchStaff(notes: midi.playbackNotes).frame(height: 170)
                           KeyboardView(activeNotes: midi.playbackNotes).frame(height: 120)
                           Text(midi.status).font(.caption)
-                          Text("Experimental MIDI playback uses the selected audio or MIDI output. Notation is not yet available.").font(.footnote).foregroundStyle(.secondary)
+                          Text("Live pitch notation is inferred from MIDI; rhythmic notation and fingering are not yet available.").font(.footnote).foregroundStyle(.secondary)
                       }
                       .navigationTitle("MIDI Music Library")
                       .searchable(text: $songSearch)
@@ -951,6 +957,44 @@ workflows:
                           if [2,3,4].contains(value) { startOctave = min(8 - value, max(1, startOctave)) }
                       }
                   }
+              }
+          }
+
+          // Pitch-only grand staff, not a rhythmic score.
+          struct LivePitchStaff: View {
+              let notes: Set<Int>
+              private func step(_ note: Int) -> Int {
+                  (note / 12 - 1) * 7 + [0,0,1,1,2,3,3,4,4,5,5,6][note % 12]
+              }
+              var body: some View {
+                  Canvas { context, size in
+                      let spacing = size.height / 26
+                      let center = size.height / 2
+                      func y(_ degree: Int) -> CGFloat { center - CGFloat(degree - 28) * spacing }
+                      func line(_ x1: CGFloat, _ x2: CGFloat, _ degree: Int) {
+                          var path = Path()
+                          path.move(to: CGPoint(x: x1, y: y(degree)))
+                          path.addLine(to: CGPoint(x: x2, y: y(degree)))
+                          context.stroke(path, with: .foreground, lineWidth: 1)
+                      }
+                      for degree in [18,20,22,24,26,30,32,34,36,38] {
+                          line(28, size.width - 8, degree)
+                      }
+                      context.draw(Text("𝄞").font(.system(size: 27)), at: CGPoint(x: 15, y: y(34)))
+                      context.draw(Text("𝄢").font(.system(size: 27)), at: CGPoint(x: 15, y: y(22)))
+                      let visible = notes.sorted().filter { (16...40).contains(step($0)) }
+                      for (index, note) in visible.enumerated() {
+                          let degree = step(note)
+                          let x = 48 + CGFloat(index) * max(1, (size.width - 65) / CGFloat(max(1, visible.count)))
+                          if degree == 28 || degree == 16 || degree == 40 { line(x - 9, x + 9, degree) }
+                          let rect = CGRect(x: x - 5, y: y(degree) - 3.5, width: 10, height: 7)
+                          context.fill(Path(ellipseIn: rect), with: .foreground)
+                          if [1,3,6,8,10].contains(note % 12) {
+                              context.draw(Text("♯").font(.system(size: 12)), at: CGPoint(x: x - 11, y: y(degree)))
+                          }
+                      }
+                  }
+                  .accessibilityLabel("Live pitch staff, middle register")
               }
           }
 
