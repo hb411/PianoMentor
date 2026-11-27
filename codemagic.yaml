@@ -300,10 +300,12 @@ workflows:
               private var audioReady = false
               private var touchNotes: Set<UInt8> = []
               private var touchDestination: MIDIEndpointRef?
+              private var touchUsesLocal = false
               func touchOn(_ note: UInt8) {
                   guard !touchNotes.contains(note) else { return }
                   if isPlaying { stopPlayback() }
-                  if localAudio {
+                  if touchNotes.isEmpty { touchUsesLocal = localAudio }
+                  if touchUsesLocal {
                       do { try configureAudio() } catch { status = error.localizedDescription; return }
                       sampler.startNote(note, withVelocity: 85, onChannel: 0)
                   } else {
@@ -317,7 +319,7 @@ workflows:
               }
               func touchOff(_ note: UInt8) {
                   guard touchNotes.remove(note) != nil else { return }
-                  if localAudio { sampler.stopNote(note, onChannel: 0) }
+                  if touchUsesLocal { sampler.stopNote(note, onChannel: 0) }
                   else if let dest = touchDestination { send(status: 0x80, note: note, velocity: 0, to: dest) }
                   if touchNotes.isEmpty { touchDestination = nil }
                   playbackNotes = Set(touchNotes.map(Int.init))
@@ -402,6 +404,7 @@ workflows:
                   guard !events.isEmpty else { status = "No playable MIDI notes"; return }
                   events.sort { $0.0 == $1.0 ? ($0.3 == 0xB0 ? $1.3 != 0xB0 : $0.3 == 0x80 && $1.3 == 0x90) : $0.0 < $1.0 }
                   let timeline = events
+                  playbackUsesLocal = local
                   if !local { playbackDestination = dest }
                   let generation = playbackGeneration
                   let origin = ProcessInfo.processInfo.systemUptime
@@ -419,8 +422,10 @@ workflows:
                           } else if command == 0x90 {
                               counts[note, default: 0] += 1
                               self.sounding.insert(note)
-                              if local { self.sampler.startNote(note, withVelocity: velocity, onChannel: 0) }
-                              else { self.send(status: 0x90, note: note, velocity: velocity, to: dest) }
+                              if counts[note] == 1 {
+                                  if local { self.sampler.startNote(note, withVelocity: velocity, onChannel: 0) }
+                                  else { self.send(status: 0x90, note: note, velocity: velocity, to: dest) }
+                              }
                           } else if let count = counts[note] {
                               if count <= 1 {
                                   counts.removeValue(forKey: note)
@@ -441,6 +446,7 @@ workflows:
               private var playbackGeneration = 0
               private var sounding: Set<UInt8> = []
               private var playbackDestination: MIDIEndpointRef?
+              private var playbackUsesLocal = false
               @Published var visualDelay = 0.35
               @Published var isPlaying = false
               @Published var playbackNotes: Set<Int> = []
@@ -454,7 +460,7 @@ workflows:
                       send(status: 0xB0, note: 64, velocity: 0, to: dest)
                       send(status: 0xB0, note: 123, velocity: 0, to: dest)
                   }
-                  if localAudio {
+                  if playbackUsesLocal {
                       for note in sounding { sampler.stopNote(note, onChannel: 0) }
                       sampler.sendController(64, withValue: 0, onChannel: 0)
                       sampler.sendController(123, withValue: 0, onChannel: 0)
@@ -463,6 +469,7 @@ workflows:
                   playbackNotes = []
                   lastPlaybackNotes = []
                   playbackDestination = nil
+                  playbackUsesLocal = false
                   isPlaying = false
               }
 
@@ -481,6 +488,7 @@ workflows:
                       guard MIDIGetNumberOfDestinations() > 0, destinationIDs.contains(dest) else { status = "MIDI destination unavailable"; return }
                       playbackDestination = dest
                   }
+                  playbackUsesLocal = local
                   isPlaying = true
                   let generation = playbackGeneration
                   let delay = local ? 0 : visualDelay
