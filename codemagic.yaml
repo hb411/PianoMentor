@@ -215,10 +215,13 @@ workflows:
                   DispatchQueue.main.async {
                       self.sources = s; self.destinations = d
                       self.destinationIDs = (0..<MIDIGetNumberOfDestinations()).map { MIDIGetDestination($0) }
-                      if let selected = self.selectedDestination, !self.destinationIDs.contains(selected) {
+                      let lostPlayback = self.playbackDestination.map { !self.destinationIDs.contains($0) } ?? false
+                      let lostTouch = self.touchDestination.map { !self.destinationIDs.contains($0) } ?? false
+                      let lostSelection = self.selectedDestination.map { !self.destinationIDs.contains($0) } ?? false
+                      if lostPlayback || lostTouch || lostSelection {
                           self.stopPlayback()
-                          self.selectedDestination = nil
                       }
+                      if lostSelection { self.selectedDestination = nil }
                       self.status = (s.isEmpty && d.isEmpty) ? "No MIDI device detected" : "MIDI connected"
                   }
               }
@@ -317,6 +320,7 @@ workflows:
                   } else {
                       guard MIDIGetNumberOfDestinations() > 0 else { status = "Select internal audio in Settings"; return }
                       let dest = touchDestination ?? selectedDestination ?? MIDIGetDestination(0)
+                      guard destinationIDs.contains(dest) else { status = "MIDI destination unavailable"; return }
                       touchDestination = dest
                       send(status: 0x90, note: note, velocity: 85, to: dest)
                   }
