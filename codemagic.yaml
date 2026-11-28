@@ -886,7 +886,21 @@ workflows:
                       }
                   }
                   if !matches.isEmpty { return matches.joined(separator: " · ") }
-                  return nil
+                  // Rootless interpretations are suggestions, never definitive chord names.
+                  // Require both guide tones and at least one extension.
+                  let rootless: [(Set<Int>, String)] = [
+                      ([4,7,10,2], "9"), ([4,10,2,9], "13"),
+                      ([4,10,1,8], "7♭9♭13"), ([4,10,3,8], "7♯9♭13"),
+                      ([3,7,10,2], "m9"), ([3,10,2,5], "m11"),
+                      ([4,7,11,2], "maj9"), ([4,11,2,9], "maj13")
+                  ]
+                  for root in roots where !pcs.contains(root) {
+                      let relative = Set(pcs.map { ($0 - root + 12) % 12 })
+                      for (pattern, quality) in rootless where relative == pattern {
+                          matches.append(names[root] + quality + " (possible rootless)")
+                      }
+                  }
+                  return matches.isEmpty ? nil : matches.joined(separator: " · ")
               }
 
               private func noteName(_ n: Int?) -> String {
