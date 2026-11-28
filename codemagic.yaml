@@ -865,6 +865,16 @@ workflows:
                   .tint([Color.blue, .green, .orange, .purple, .red, .teal][min(5, max(0, keyHighlight))])
                   .onDisappear { midi.stopPlayback() }
                   .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in midi.stopPlayback() }
+                  .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { notification in
+                      guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                            AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+                      midi.stopPlayback()
+                  }
+                  .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { notification in
+                      guard let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                            AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
+                      if midi.localAudio { midi.stopPlayback() }
+                  }
               }
 
               private func chordName(_ notes: Set<Int>) -> String? {
