@@ -384,9 +384,9 @@ workflows:
                           if type == kMusicEventType_MIDINoteMessage, let data, size >= UInt32(MemoryLayout<MIDINoteMessage>.size) {
                               let n = data.load(as: MIDINoteMessage.self)
                               var start: Float64 = 0, end: Float64 = 0
-                              if n.channel != 9, n.note <= 127, n.velocity > 0, n.duration > 0, MusicSequenceGetSecondsForBeats(sequence, beat, &start) == noErr,
+                              if n.channel < 16, n.channel != 9, n.note <= 127, n.velocity > 0, n.velocity <= 127, n.duration.isFinite, n.duration > 0, MusicSequenceGetSecondsForBeats(sequence, beat, &start) == noErr,
                                  MusicSequenceGetSecondsForBeats(sequence, beat + Double(n.duration), &end) == noErr,
-                                 start.isFinite, end.isFinite, start >= 0, end >= start {
+                                 start.isFinite, end.isFinite, start >= 0, end > start {
                                   events.append((start, n.note, n.velocity, (0x90 | n.channel)))
                                   events.append((end, n.note, 0, (0x80 | n.channel)))
                               }
